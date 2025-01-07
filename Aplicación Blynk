@@ -1,0 +1,137 @@
+//CODIGO ESP8266WIFI PROYECTO FINAL 
+//MEDICION DE PORCENTAJE DE LLENADO DE TANQUE
+#define BLYNK_TEMPLATE_ID     "TMPL2sK7XqRoA"
+#define BLYNK_TEMPLATE_NAME   "Quickstart Device"
+#define BLYNK_AUTH_TOKEN      "SawiX9JeonRfljLBQQoLf5eRtq7YgaNk"  // Asegúrate de que este token sea correcto
+
+/* Comment this out to disable prints and save space */
+#define BLYNK_PRINT Serial
+
+// Datos de la red Wi-Fi
+//Tener en cuenta que el modulo ESP8266 WIFI solo conecta a redes 2.4G
+char ssid[] = "software1";  // Nombre de la red Wi-Fi
+char pass[] = "Esime12345"; // Contraseña de la red Wi-Fi
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <NewPing.h>
+
+// Pines del ESP8266 usando D1, D2 para el sensor
+#define TRIGGER_PIN D1   // Pin de disparo del sensor ultrasonido TRIG
+#define ECHO_PIN D2      // Pin de eco del sensor ultrasonido ECHO
+
+#define MAX_DISTANCE 500 // Distancia máxima del sensor (en cm)
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);
+
+// Variables para el cálculo de porcentaje
+float TankHeight = 13.0;  // Altura total del tanque en cm
+float WaterLevelMAX = 13.0;  // Altura máxima de agua
+float GapbwSonar = 2.0; // Ajuste para el sensor
+
+// Suavizado de distancia
+float distanciaSuavizada = MAX_DISTANCE;  // Valor inicial del suavizado
+float alpha = 0.2;  // Factor de suavizado 
+int porcentaje = 0;  // Porcentaje de llenado
+
+// Variables para medición promedio
+const int muestras = 5; // Número de muestras para calcular el promedio y sacar una mejor distancia real
+float SonarReading = 0.0, ActualReading = 0.0, Temp = 0.0; // Lecturas del sensor
+
+// Configuración de Blynk
+BlynkTimer timer;
+
+// Declaración de la función sendWaterLevel
+void sendWaterLevel();
+
+void setup() {
+  Serial.begin(9600); // Iniciar el monitor serial
+
+  // Configurar los pines
+  pinMode(TRIGGER_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Iniciar Wi-Fi
+  WiFi.begin(ssid, pass);
+  Serial.println("Conectando a Wi-Fi...");
+  
+  // Esperar hasta que se conecte a la red Wi-Fi
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("Conexión Wi-Fi exitosa!");
+  Serial.print("Dirección IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Iniciar Blynk
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  // Esperar conexión con Blynk solo una vez
+  while (!Blynk.connected()) {
+    Serial.println("Conectando a Blynk...");
+    delay(1000); // Esperar hasta que se conecte a Blynk
+  }
+  Serial.println("Conexión a Blynk exitosa!");
+
+  // Configurar temporizador
+  timer.setInterval(1000L, sendWaterLevel); // Enviar datos de nivel de agua cada segundo
+}
+
+void sendWaterLevel() {
+  // Promedio de varias mediciones
+  float distanciaTotal = 0;
+  for (int i = 0; i < muestras; i++) {
+    SonarReading = sonar.ping_cm();  // Medir distancia
+
+    // Si el sensor no detecta nada, asignamos el valor máximo de distancia
+    if (SonarReading == 0) {
+      distanciaTotal += MAX_DISTANCE;
+    } else {
+      distanciaTotal += SonarReading;
+    }
+
+    delay(50); // Pausa entre mediciones
+  }
+
+  // Promedio de las mediciones
+  float distanciaPromedio = distanciaTotal / muestras;
+
+  // Suavizado exponencial de la distancia
+  distanciaSuavizada = (alpha * distanciaPromedio) + ((1 - alpha) * distanciaSuavizada);
+
+  // Cálculo del porcentaje de llenado
+  if (distanciaSuavizada >= MAX_DISTANCE) {
+    porcentaje = 0; // Tanque vacío
+  } else if (distanciaSuavizada >= (3 + GapbwSonar)) {
+    // Calculamos el porcentaje de llenado en base a la distancia
+    Temp = distanciaSuavizada - GapbwSonar;
+    ActualReading = WaterLevelMAX - Temp;
+    porcentaje = (ActualReading / WaterLevelMAX) * 100;
+    porcentaje = constrain(porcentaje, 0, 100); // Aseguramos que el porcentaje esté entre 0 y 100
+  } else {
+    porcentaje = 100; // Tanque lleno
+  }
+
+  // Enviar el porcentaje a Blynk
+  Blynk.virtualWrite(V4, porcentaje);  // V4 es el widget de display en la app de Blynk
+
+  // Mostrar en el serial monitor
+  Serial.print("Distancia suavizada: ");
+  Serial.print(distanciaSuavizada);
+  Serial.println(" cm");
+  Serial.print("Porcentaje: ");
+  Serial.print(porcentaje);
+  Serial.println(" %");
+}
+
+void loop() {
+  Blynk.run();  // Procesar las actualizaciones de Blynk
+  timer.run();  // Ejecutar las tareas programadas
+
+  // Solo intentamos reconectar si se ha perdido la conexión
+  if (!Blynk.connected()) {
+    Serial.println("Desconectado de Blynk, reconectando...");
+    Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);  // Reintentar la conexión
+    delay(5000);  // Esperar 5 segundos antes de reintentar
+  }
+}
